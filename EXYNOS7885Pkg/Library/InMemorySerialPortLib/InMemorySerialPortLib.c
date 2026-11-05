@@ -14,8 +14,20 @@
 
 
 #include <Base.h>
+#include <Library/IoLib.h>
 #include <Library/SerialPortLib.h>
 #include <Library/CacheMaintenanceLib.h>
+
+#define AML_UART_BASE         0xc81004c0
+#define AML_UART_RX_EMPTY     BIT20
+#define AML_UART_TX_FULL      BIT21
+
+#define AML_UART_WFIFO_OFFSET    0x00
+#define AML_UART_RFIFO_OFFSET    0x04
+#define AML_UART_CONTROL_OFFSET  0x08
+#define AML_UART_STATUS_OFFSET   0x0C
+#define AML_UART_MISC_OFFSET     0x10
+#define AML_UART_REG5_OFFSET     0x14
 
 /**
   Initialize the serial device hardware.
@@ -34,22 +46,7 @@ SerialPortInitialize (
   VOID
   )
 {
-  UINT8* base = (UINT8*)0x8d100000ull;
-  for (UINTN i = 0; i < 0x200000; i++) {
-    base[i] = 0;
-  }
-  return RETURN_SUCCESS;
-}
-
-static void mem_putchar(UINT8 c) {
-  static const UINTN size = 0x200000;
-  static UINTN offset = 0;
-  UINT8* base = (UINT8*)0x8d100000ull;
-  base[offset++] = c;
-  if (offset >= size) {
-    offset = 0;
-  }
-  WriteBackInvalidateDataCacheRange(base, size);
+  return EFI_SUCCESS;
 }
 
 /**
@@ -76,9 +73,15 @@ SerialPortWrite (
   IN UINTN     NumberOfBytes
 )
 {
-  for (UINTN i = 0; i < NumberOfBytes; i++) {
-    mem_putchar(Buffer[i]);
+  UINT8         *Final;
+
+  Final = &Buffer[NumberOfBytes];
+
+  while (Buffer < Final) {
+    while (MmioRead32 (AML_UART_BASE + AML_UART_STATUS_OFFSET) & AML_UART_TX_FULL);
+    MmioWrite8 (AML_UART_BASE, *Buffer++);
   }
+
   return NumberOfBytes;
 }
 
@@ -106,7 +109,17 @@ SerialPortRead (
   IN  UINTN     NumberOfBytes
 )
 {
-  return 0;
+  UINTN   Count;
+
+  for (Count = 0; Count < NumberOfBytes; Count++, Buffer++) {
+     // Loop while waiting for a new char(s) to arrive in the
+     // RxFIFO
+    while (MmioRead32 (AML_UART_BASE + AML_UART_STATUS_OFFSET) & AML_UART_RX_EMPTY);
+
+    *Buffer = (UINT8)(MmioRead32 (AML_UART_BASE + AML_UART_RFIFO_OFFSET) & 0xFF);
+  }
+
+  return NumberOfBytes;
 }
 
 /**
@@ -126,7 +139,7 @@ SerialPortPoll (
   VOID
   )
 {
-  return FALSE;
+  return ((MmioRead32 (AML_UART_BASE + AML_UART_STATUS_OFFSET) & AML_UART_RX_EMPTY) == 0);
 }
 
 /**
